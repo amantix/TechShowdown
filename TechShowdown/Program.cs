@@ -9,36 +9,29 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 
 namespace TechShowdown
 {
     public class User
     {
         public Guid Id { get; set; }
-
         public string Name { get; set; }
-        
-        //Добавим в класс пользователя навигационное свойство для доступа к постам
         public ICollection<Post> Posts { get; set; }
+
+        //Добавим свойство для фильтрации пользователей в запросе
+        public bool HasLongName => Name.Length > 10;
     }
 
-    /*
-     * Добавим класс для представления информации о постах пользователя
-     */
     public class Post
     {
-        //С помощью атрибутов можно настраивать 
         [Key, DatabaseGenerated(DatabaseGeneratedOption.None)]
         public Guid Id { get; set; }
-
         public User User { get; set; }
         public Guid UserId { get; set; }
         public string Content { get; set; }
     }
 
-    /*
-     * Контекст базы данных, содержащей таблицы пользователей и их постов
-     */
     public sealed class AppDb : DbContext
     {
         /*
@@ -62,7 +55,8 @@ namespace TechShowdown
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
-            optionsBuilder.UseSqlServer(connectionString);
+            optionsBuilder.UseSqlServer(connectionString)
+                .UseLoggerFactory(new LoggerFactory(new[]{new ConsoleLoggerProvider((_,__)=>true,true)}));
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -74,13 +68,12 @@ namespace TechShowdown
                 entity.Property(e => e.Id).ValueGeneratedNever();
             });
 
-            //Настраиваем связь один-ко-многим между пользователями и постами
             modelBuilder.Entity<Post>(entity =>
             {
-                entity.HasOne(p => p.User)//у одного пользователя
-                    .WithMany(u => u.Posts)//может быть много постов
-                    .HasForeignKey(p => p.UserId);//Связь осуществляется через UserId у поста
-            });//Обратите внимание на миграцию, на то, как создалась связь и добавился индекс по UserId
+                entity.HasOne(p => p.User)
+                    .WithMany(u => u.Posts)
+                    .HasForeignKey(p => p.UserId);
+            });
 
             var johnId = new Guid("b32b790d-f9cb-49eb-9e7b-4e6132592084");
             var sarahId = new Guid("62ad51cc-7475-48bb-b7a8-afe5631cd26f");
@@ -113,6 +106,8 @@ namespace TechShowdown
                     }
                 );
         }
+        
+         
     }
 
     class Program
@@ -126,6 +121,7 @@ namespace TechShowdown
                 //Выведем пользователей с первым постом каждого из них
                 var users = db.Users
                     .Where(u => u.Posts.Any())
+                    .Where(u=>u.HasLongName)
                     .Select(user => new {user.Name, user.Posts.FirstOrDefault().Content})
                     .ToList();
                 Console.WriteLine(string.Join('\n', users));
