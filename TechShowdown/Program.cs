@@ -1,5 +1,9 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -8,20 +12,32 @@ using Microsoft.Extensions.Logging;
 
 namespace TechShowdown
 {
-    /*
-     * Добавим класс для хранения данных о пользователе
-     * Пусть для начала он будет содержать идентификатор и имя
-     */
     public class User
     {
         public Guid Id { get; set; }
 
         public string Name { get; set; }
+        
+        //Добавим в класс пользователя навигационное свойство для доступа к постам
+        public ICollection<Post> Posts { get; set; }
     }
 
     /*
-     * Добавим также контекст базы данных, содержащей таблицу с нашими пользователями
-     * Класс наследуется от DbContext
+     * Добавим класс для представления информации о постах пользователя
+     */
+    public class Post
+    {
+        //С помощью атрибутов можно настраивать 
+        [Key, DatabaseGenerated(DatabaseGeneratedOption.None)]
+        public Guid Id { get; set; }
+
+        public User User { get; set; }
+        public Guid UserId { get; set; }
+        public string Content { get; set; }
+    }
+
+    /*
+     * Контекст базы данных, содержащей таблицы пользователей и их постов
      */
     public sealed class AppDb : DbContext
     {
@@ -31,32 +47,26 @@ namespace TechShowdown
          */
         private readonly string connectionString;
 
+        //Публичный конструктор без параметров нужен для корректной работы Entity Framework
+        public AppDb(){}
+
         public AppDb(string connectionString)
         {
             this.connectionString = connectionString;
-            Database.EnsureCreated(); //.Migrate();
         }
 
-        //Коллекция DbSet<User> будет использоваться для работы с пользователями
+        //Коллекциии, в которые лениво мапятся таблицы пользователей и постов
         public DbSet<User> Users { get; set; }
 
-        /*
-         * В перегруженном методе OnConfiguring настраиваем подключение к базе данных
-         * Пример строки подключения:
-         * Server=(localdb)\mssqllocaldb;Database=AppDb;AttachDbFilename=E:\AppDb.mdf;Trusted_Connection=True;ConnectRetryCount=0
-         */
+        public DbSet<Post> Posts { get; set; }
+
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
-            optionsBuilder
-                .UseSqlServer(connectionString);
-            
-            //.UseInMemoryDatabase("AppDb"); //Можно пользоваться бд в памяти, но для нашего примера не подойдёт
+            optionsBuilder.UseSqlServer(connectionString);
         }
 
-        //Настраиваем модель данных
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            //Настраиваем маппинг пользователя в бд
             modelBuilder.Entity<User>(entity =>
             {
                 entity.Property(e => e.Name).IsRequired();
@@ -64,18 +74,42 @@ namespace TechShowdown
                 entity.Property(e => e.Id).ValueGeneratedNever();
             });
 
-            //Добавляем начальные данные (seed) в банку
+            //Настраиваем связь один-ко-многим между пользователями и постами
+            modelBuilder.Entity<Post>(entity =>
+            {
+                entity.HasOne(p => p.User)//у одного пользователя
+                    .WithMany(u => u.Posts)//может быть много постов
+                    .HasForeignKey(p => p.UserId);//Связь осуществляется через UserId у поста
+            });//Обратите внимание на миграцию, на то, как создалась связь и добавился индекс по UserId
+
+            var johnId = new Guid("b32b790d-f9cb-49eb-9e7b-4e6132592084");
+            var sarahId = new Guid("62ad51cc-7475-48bb-b7a8-afe5631cd26f");
             modelBuilder.Entity<User>()
                 .HasData(
                     new User
                     {
-                        Id = Guid.NewGuid(),
+                        Id = johnId,
                         Name = "John Snow"
                     },
                     new User
                     {
-                        Id = Guid.NewGuid(),
+                        Id = sarahId,
                         Name = "Sarah Connor"
+                    }
+                );
+            modelBuilder.Entity<Post>()
+                .HasData(
+                    new Post
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId = johnId,
+                        Content = "Winter is coming"
+                    },
+                    new Post
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId =  sarahId,
+                        Content = "Hasta la vista, baby"
                     }
                 );
         }
@@ -85,17 +119,15 @@ namespace TechShowdown
     {
         static void Main(string[] args)
         {
-            /*
-             * Считываем строку подключения из аргументов командной строки
-             * По взрослому - из файла конфигурации считывать
-             */
             var connectionString = args.FirstOrDefault();
 
-            //Все действия с бд выполняем в контексте
             using (var db = new AppDb(connectionString))
             {
-                //Пока просто выведем имена всех пользователей
-                var users = db.Users.Select(u => u.Name).ToList();
+                //Выведем пользователей с первым постом каждого из них
+                var users = db.Users
+                    .Where(u => u.Posts.Any())
+                    .Select(user => new {user.Name, user.Posts.FirstOrDefault().Content})
+                    .ToList();
                 Console.WriteLine(string.Join('\n', users));
             }
         }
