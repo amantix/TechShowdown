@@ -19,14 +19,25 @@ namespace TechShowdown
         public string Name { get; set; }
         public ICollection<Post> Posts { get; set; }
 
-        //Добавим свойство для фильтрации пользователей в запросе
+        /*
+         * В логах после выполнения запроса с применением этого фильтра выводится
+         * The LINQ expression 'where [u].HasLongName' could not be translated and will be evaluated locally.
+         * Это - отвратительно: вытянется вся таблица и пофильтруется локально!
+         */
         public bool HasLongName => Name.Length > 10;
+
+        /*
+         * Вместо описания обычного свойства реализуем фильтр в виде Expression
+         * Который сможет транслироваться в запрос
+         */
+        public static Expression<Func<User, bool>> HasLongNameExpression = user => user.Name.Length > 10;
     }
 
     public class Post
     {
         [Key, DatabaseGenerated(DatabaseGeneratedOption.None)]
         public Guid Id { get; set; }
+
         public User User { get; set; }
         public Guid UserId { get; set; }
         public string Content { get; set; }
@@ -56,7 +67,9 @@ namespace TechShowdown
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
             optionsBuilder.UseSqlServer(connectionString)
-                .UseLoggerFactory(new LoggerFactory(new[]{new ConsoleLoggerProvider((_,__)=>true,true)}));
+                .UseLoggerFactory(new LoggerFactory(new[] {new ConsoleLoggerProvider((_, __) => true, true)}))
+                //Настроим выбрасывание исключения в случае скатывания в локальные вычисления
+                .ConfigureWarnings(w => w.Throw(RelationalEventId.QueryClientEvaluationWarning));
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -101,13 +114,11 @@ namespace TechShowdown
                     new Post
                     {
                         Id = Guid.NewGuid(),
-                        UserId =  sarahId,
+                        UserId = sarahId,
                         Content = "Hasta la vista, baby"
                     }
                 );
         }
-        
-         
     }
 
     class Program
@@ -121,7 +132,7 @@ namespace TechShowdown
                 //Выведем пользователей с первым постом каждого из них
                 var users = db.Users
                     .Where(u => u.Posts.Any())
-                    .Where(u=>u.HasLongName)
+                    .Where(User.HasLongNameExpression) //Даже после запрета локального выполнения всё работает
                     .Select(user => new {user.Name, user.Posts.FirstOrDefault().Content})
                     .ToList();
                 Console.WriteLine(string.Join('\n', users));
